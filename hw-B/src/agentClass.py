@@ -1,18 +1,19 @@
 import numpy as np
-import random
-import math
-import h5py
+
+from collections import defaultdict
+
+from gameboardClass import TGameBoard
 
 class TQAgent:
     # Agent for learning to play tetris using Q-learning
-    def __init__(self,alpha,epsilon,episode_count):
+    def __init__(self, alpha: float, epsilon: float, episode_count: int):
         # Initialize training parameters
         self.alpha=alpha
         self.epsilon=epsilon
         self.episode=0
         self.episode_count=episode_count
 
-    def fn_init(self,gameboard):
+    def fn_init(self,gameboard: TGameBoard):
         self.gameboard=gameboard
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
@@ -27,26 +28,27 @@ class TQAgent:
         # 'len(gameboard.tiles)' number of different tiles
         # 'self.episode_count' the total number of episodes in the training
 
-    def fn_load_strategy(self,strategy_file):
-        pass
-        # TO BE COMPLETED BY STUDENT
-        # Here you can load the Q-table (to Q-table of self) from the input
-        # parameter strategy_file (used to test how the agent plays)
+    def fn_load_strategy(self, strategy_file: str):
+        # The Q-table is stored as a S x A matrix.
+
+        # S is the unique integer identifying the board state. It's calculated
+        # using the board from top left to bottom right as a bit-sequence.
+
+        # A is 28, the total amount of possible actions for each board state
+        self.q_table = defaultdict(lambda: 100.0)
+
 
     def fn_read_state(self):
-        pass
-        # TO BE COMPLETED BY STUDENT
-        # This function should be written by you
-        # Instructions:
-        # In this function you could calculate the current state of the gane board
-        # You can for example represent the state as an integer entry in the Q-table
-        # This function should not return a value, store the state as an attribute of self
+        self.board_state_id = self.state_id(self.gameboard.board, self.gameboard.cur_tile_type)
 
-        # Useful variables:
-        # 'self.gameboard.N_row' number of rows in gameboard
-        # 'self.gameboard.N_col' number of columns in gameboard
-        # 'self.gameboard.board[index_row,index_col]' table indicating if row 'index_row' and column 'index_col' is occupied (+1) or free (-1)
-        # 'self.gameboard.cur_tile_type' identifier of the current tile that should be placed on the game board (integer between 0 and len(self.gameboard.tiles))
+    def state_id(board: np.ndarray, tile_type: int) -> str:
+        flat = board.flatten()
+        output = ["0"] * board.size
+        for i, x in enumerate(flat):
+            if x > 0:
+                output[i] = "1"
+
+        return "".join(output) + str(tile_type)
 
     def fn_select_action(self):
         pass
