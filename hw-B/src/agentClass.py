@@ -23,8 +23,8 @@ class TQAgent:
         self.gameboard = gameboard
 
         now = datetime.datetime.now()
-        self.q_file = h5py.File(f"./cache/q_table/{now.isoformat().hdf5}", "x")
-        self.state_count = np.pow(
+        self.q_file = h5py.File(f"./cache/q_table/{now.isoformat()}.hdf5", "x")
+        self.state_count = np.power(
             2,
             self.gameboard.N_col * self.gameboard.N_row + self.gameboard.max_tile_count,
         )
@@ -32,7 +32,7 @@ class TQAgent:
         # This shouldn't be able to fail since q_file should be unique due to
         # the time-stamp file name
         self.q_table = self.q_file.create_dataset(
-            "q_table", (self.state_count, self.action_count), dtype="float"
+            "q_table", (self.state_count, self.action_count), dtype=np.dtype(float)
         )
         # Optimistic initialisation
         self.q_table[:, :] = 100.0
@@ -70,32 +70,32 @@ class TQAgent:
         return output
 
     def fn_select_action(self):
-        if np.random.random_sample() < self.epsilon:
-            # Random action
-            self.action_taken = np.random.randint(0, self.action_count)
-        else:
-            # Greedy action
-            self.action_taken = np.argmax(self.q_table[self.state_id, :])
+        is_valid = False
+        while not is_valid:
+            if np.random.random_sample() < self.epsilon:
+                # Random action
+                self.action_taken = np.random.randint(0, self.action_count)
+            else:
+                # Greedy action
+                # TODO: Handle multiple maximal values
+                self.action_taken = np.nanargmax(self.q_table[self.state_id, :])
 
-        # Actions are stored in a row of the Q-Table as (col, rot) in the
-        # following order:
-        #   (0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), ...
-        col = self.action_taken // 4
-        rot = self.action_taken % 4
+            # Actions are stored in a row of the Q-Table as (col, rot) in the
+            # following order:
+            #   (0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), ...
+            col = self.action_taken // 4
+            rot = self.action_taken % 4
 
-        is_valid = self.gameboard.fn_move(col, rot)
-        # What do we do if it is invalid? Set to NaN?
+            # What do we do if it is invalid? Set to NaN?
+            is_valid = self.gameboard.fn_move(col, rot)
 
-    def fn_reinforce(self, old_state, reward):
-        pass
-        # TO BE COMPLETED BY STUDENT
-        # This function should be written by you
-        # Instructions:
-        # Update the Q table using state and action stored as attributes in self and using function arguments for the old state and the reward
-        # This function should not return a value, the Q table is stored as an attribute of self
+            if not is_valid:
+                self.q_table[self.state_id, self.action_taken] = np.nan
 
-        # Useful variables:
-        # 'self.alpha' learning rate
+    def fn_reinforce(self, old_state_id: int, reward: float):
+        # TODO: Do we need to store self.old_action_taken? Or do have we not
+        # updated the action yet?
+        self.q_table[old_state_id, self.action_taken] += self.alpha * (reward + np.nanmax(self.q_table[self.state_id,:]) - self.q_table[old_state_id, self.action_taken])
 
     def fn_turn(self):
         if self.gameboard.gameover:
@@ -130,7 +130,10 @@ class TQAgent:
                 if self.episode in saveEpisodes:
                     pass
                     # TO BE COMPLETED BY STUDENT
-                    # Here you can save the rewards and the Q-table to data files for plotting of the rewards and the Q-table can be used to test how the agent plays
+                    # Here you can save the rewards and the Q-table to data
+                    # files for plotting of the rewards and the Q-table can be
+                    # used to test how the agent plays
+
             if self.episode >= self.episode_count:
                 raise SystemExit(0)
             else:
