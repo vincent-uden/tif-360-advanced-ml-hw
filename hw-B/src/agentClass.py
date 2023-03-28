@@ -1,32 +1,43 @@
+import datetime
 import numpy as np
+import h5py  # type: ignore
 
-from collections import defaultdict
+from typing import Literal
 
 from gameboardClass import TGameBoard
 
+
 class TQAgent:
+    q_file: h5py.File
+    q_table: h5py.Dataset
+
     # Agent for learning to play tetris using Q-learning
     def __init__(self, alpha: float, epsilon: float, episode_count: int):
         # Initialize training parameters
-        self.alpha=alpha
-        self.epsilon=epsilon
-        self.episode=0
-        self.episode_count=episode_count
+        self.alpha = alpha
+        self.epsilon = epsilon
+        self.episode = 0
+        self.episode_count = episode_count
 
-    def fn_init(self,gameboard: TGameBoard):
-        self.gameboard=gameboard
-        # TO BE COMPLETED BY STUDENT
-        # This function should be written by you
-        # Instructions:
-        # In this function you could set up and initialize the states, actions
-        # and Q-table and storage for the rewards This function should not
-        # return a value, store Q table etc as attributes of self
+    def fn_init(self, gameboard: TGameBoard):
+        self.gameboard = gameboard
 
-        # Useful variables:
-        # 'gameboard.N_row' number of rows in gameboard
-        # 'gameboard.N_col' number of columns in gameboard
-        # 'len(gameboard.tiles)' number of different tiles
-        # 'self.episode_count' the total number of episodes in the training
+        now = datetime.datetime.now()
+        self.q_file = h5py.File(f"./cache/q_table/{now.isoformat().hdf5}", "x")
+        self.state_count = np.pow(
+            2,
+            self.gameboard.N_col * self.gameboard.N_row + self.gameboard.max_tile_count,
+        )
+        self.action_count = self.gameboard.N_col * 4
+        # This shouldn't be able to fail since q_file should be unique due to
+        # the time-stamp file name
+        self.q_table = self.q_file.create_dataset(
+            "q_table", (self.state_count, self.action_count), dtype="float"
+        )
+        # Optimistic initialisation
+        self.q_table[:, :] = 100.0
+
+        # Rewards???
 
     def fn_load_strategy(self, strategy_file: str):
         # The Q-table is stored as a S x A matrix.
@@ -35,40 +46,47 @@ class TQAgent:
         # using the board from top left to bottom right as a bit-sequence.
 
         # A is 28, the total amount of possible actions for each board state
-        self.q_table = defaultdict(lambda: 100.0)
-
+        self.q_file = h5py.File(strategy_file, "r")
+        self.q_table = self.q_file["q_table"]
 
     def fn_read_state(self):
-        self.board_state_id = self.state_id(self.gameboard.board, self.gameboard.cur_tile_type)
+        self.state_id = self.calc_state_id(
+            self.gameboard.board, self.gameboard.cur_tile_type
+        )
 
-    def state_id(board: np.ndarray, tile_type: int) -> str:
+    @staticmethod
+    def calc_state_id(board: np.ndarray, tile_type: int) -> int:
         flat = board.flatten()
-        output = ["0"] * board.size
+        output = 0
         for i, x in enumerate(flat):
             if x > 0:
-                output[i] = "1"
+                output += 2**i
 
-        return "".join(output) + str(tile_type)
+        if tile_type == 1 or tile_type == 3:
+            output += 2**flat.size
+        if tile_type == 2 or tile_type == 3:
+            output += 2 ** (flat.size + 1)
+
+        return output
 
     def fn_select_action(self):
-        pass
-        # TO BE COMPLETED BY STUDENT
-        # This function should be written by you
-        # Instructions:
-        # Choose and execute an action, based on the Q-table or random if epsilon greedy
-        # This function should not return a value, store the action as an attribute of self and exectute the action by moving the tile to the desired position and orientation
+        if np.random.random_sample() < self.epsilon:
+            # Random action
+            self.action_taken = np.random.randint(0, self.action_count)
+        else:
+            # Greedy action
+            self.action_taken = np.argmax(self.q_table[self.state_id, :])
 
-        # Useful variables:
-        # 'self.epsilon' parameter epsilon in epsilon-greedy policy
+        # Actions are stored in a row of the Q-Table as (col, rot) in the
+        # following order:
+        #   (0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), ...
+        col = self.action_taken // 4
+        rot = self.action_taken % 4
 
-        # Useful functions
-        # 'self.gameboard.fn_move(tile_x,tile_orientation)' use this function to execute the selected action
-        # The input argument 'tile_x' contains the column of the tile (0 <= tile_x < self.gameboard.N_col)
-        # The input argument 'tile_orientation' contains the number of 90 degree rotations of the tile (0 < tile_orientation < # of non-degenerate rotations)
-        # The function returns 1 if the action is not valid and 0 otherwise
-        # You can use this function to map out which actions are valid or not
+        is_valid = self.gameboard.fn_move(col, rot)
+        # What do we do if it is invalid? Set to NaN?
 
-    def fn_reinforce(self,old_state,reward):
+    def fn_reinforce(self, old_state, reward):
         pass
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
@@ -81,16 +99,39 @@ class TQAgent:
 
     def fn_turn(self):
         if self.gameboard.gameover:
-            self.episode+=1
-            if self.episode%100==0:
-                print('episode '+str(self.episode)+'/'+str(self.episode_count)+' (reward: ',str(np.sum(self.reward_tots[range(self.episode-100,self.episode)])),')')
-            if self.episode%1000==0:
-                saveEpisodes=[1000,2000,5000,10000,20000,50000,100000,200000,500000,1000000];
+            self.episode += 1
+            if self.episode % 100 == 0:
+                print(
+                    "episode "
+                    + str(self.episode)
+                    + "/"
+                    + str(self.episode_count)
+                    + " (reward: ",
+                    str(
+                        np.sum(
+                            self.reward_tots[range(self.episode - 100, self.episode)]
+                        )
+                    ),
+                    ")",
+                )
+            if self.episode % 1000 == 0:
+                saveEpisodes = [
+                    1000,
+                    2000,
+                    5000,
+                    10000,
+                    20000,
+                    50000,
+                    100000,
+                    200000,
+                    500000,
+                    1000000,
+                ]
                 if self.episode in saveEpisodes:
                     pass
                     # TO BE COMPLETED BY STUDENT
                     # Here you can save the rewards and the Q-table to data files for plotting of the rewards and the Q-table can be used to test how the agent plays
-            if self.episode>=self.episode_count:
+            if self.episode >= self.episode_count:
                 raise SystemExit(0)
             else:
                 self.gameboard.fn_restart()
@@ -101,31 +142,40 @@ class TQAgent:
             # Here you should write line(s) to copy the old state into the variable 'old_state' which is later passed to fn_reinforce()
 
             # Drop the tile on the game board
-            reward=self.gameboard.fn_drop()
+            reward = self.gameboard.fn_drop()
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to add the current reward to the total reward for the current episode, so you can save it to disk later
 
             # Read the new state
             self.fn_read_state()
             # Update the Q-table using the old state and the reward (the new state and the taken action should be stored as attributes in self)
-            self.fn_reinforce(old_state,reward)
+            self.fn_reinforce(old_state, reward)
 
 
 class TDQNAgent:
     # Agent for learning to play tetris using Q-learning
-    def __init__(self,alpha,epsilon,epsilon_scale,replay_buffer_size,batch_size,sync_target_episode_count,episode_count):
+    def __init__(
+        self,
+        alpha,
+        epsilon,
+        epsilon_scale,
+        replay_buffer_size,
+        batch_size,
+        sync_target_episode_count,
+        episode_count,
+    ):
         # Initialize training parameters
-        self.alpha=alpha
-        self.epsilon=epsilon
-        self.epsilon_scale=epsilon_scale
-        self.replay_buffer_size=replay_buffer_size
-        self.batch_size=batch_size
-        self.sync_target_episode_count=sync_target_episode_count
-        self.episode=0
-        self.episode_count=episode_count
+        self.alpha = alpha
+        self.epsilon = epsilon
+        self.epsilon_scale = epsilon_scale
+        self.replay_buffer_size = replay_buffer_size
+        self.batch_size = batch_size
+        self.sync_target_episode_count = sync_target_episode_count
+        self.episode = 0
+        self.episode_count = episode_count
 
-    def fn_init(self,gameboard):
-        self.gameboard=gameboard
+    def fn_init(self, gameboard):
+        self.gameboard = gameboard
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
         # Instructions:
@@ -141,7 +191,7 @@ class TDQNAgent:
         # 'self.episode_count' the total number of episodes in the training
         # 'self.replay_buffer_size' the number of quadruplets stored in the experience replay buffer
 
-    def fn_load_strategy(self,strategy_file):
+    def fn_load_strategy(self, strategy_file):
         pass
         # TO BE COMPLETED BY STUDENT
         # Here you can load the Q-network (to Q-network of self) from the strategy_file
@@ -180,7 +230,7 @@ class TDQNAgent:
         # The function returns 1 if the action is not valid and 0 otherwise
         # You can use this function to map out which actions are valid or not
 
-    def fn_reinforce(self,batch):
+    def fn_reinforce(self, batch):
         pass
         # TO BE COMPLETED BY STUDENT
         # This function should be written by you
@@ -195,19 +245,44 @@ class TDQNAgent:
 
     def fn_turn(self):
         if self.gameboard.gameover:
-            self.episode+=1
-            if self.episode%100==0:
-                print('episode '+str(self.episode)+'/'+str(self.episode_count)+' (reward: ',str(np.sum(self.reward_tots[range(self.episode-100,self.episode)])),')')
-            if self.episode%1000==0:
-                saveEpisodes=[1000,2000,5000,10000,20000,50000,100000,200000,500000,1000000];
+            self.episode += 1
+            if self.episode % 100 == 0:
+                print(
+                    "episode "
+                    + str(self.episode)
+                    + "/"
+                    + str(self.episode_count)
+                    + " (reward: ",
+                    str(
+                        np.sum(
+                            self.reward_tots[range(self.episode - 100, self.episode)]
+                        )
+                    ),
+                    ")",
+                )
+            if self.episode % 1000 == 0:
+                saveEpisodes = [
+                    1000,
+                    2000,
+                    5000,
+                    10000,
+                    20000,
+                    50000,
+                    100000,
+                    200000,
+                    500000,
+                    1000000,
+                ]
                 if self.episode in saveEpisodes:
                     pass
                     # TO BE COMPLETED BY STUDENT
                     # Here you can save the rewards and the Q-network to data files
-            if self.episode>=self.episode_count:
+            if self.episode >= self.episode_count:
                 raise SystemExit(0)
             else:
-                if (len(self.exp_buffer) >= self.replay_buffer_size) and ((self.episode % self.sync_target_episode_count)==0):
+                if (len(self.exp_buffer) >= self.replay_buffer_size) and (
+                    (self.episode % self.sync_target_episode_count) == 0
+                ):
                     pass
                     # TO BE COMPLETED BY STUDENT
                     # Here you should write line(s) to copy the current network to the target network
@@ -219,7 +294,7 @@ class TDQNAgent:
             # Here you should write line(s) to copy the old state into the variable 'old_state' which is later stored in the ecperience replay buffer
 
             # Drop the tile on the game board
-            reward=self.gameboard.fn_drop()
+            reward = self.gameboard.fn_drop()
 
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to add the current reward to the total reward for the current episode, so you can save it to disk later
@@ -237,29 +312,37 @@ class TDQNAgent:
 
 
 class THumanAgent:
-    def fn_init(self,gameboard):
-        self.episode=0
-        self.reward_tots=[0]
-        self.gameboard=gameboard
+    def fn_init(self, gameboard):
+        self.episode = 0
+        self.reward_tots = [0]
+        self.gameboard = gameboard
 
     def fn_read_state(self):
         pass
 
-    def fn_turn(self,pygame):
+    def fn_turn(self, pygame):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 raise SystemExit(0)
-            if event.type==pygame.KEYDOWN:
+            if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    self.reward_tots=[0]
+                    self.reward_tots = [0]
                     self.gameboard.fn_restart()
                 if not self.gameboard.gameover:
                     if event.key == pygame.K_UP:
-                        self.gameboard.fn_move(self.gameboard.tile_x,(self.gameboard.tile_orientation+1)%len(self.gameboard.tiles[self.gameboard.cur_tile_type]))
+                        self.gameboard.fn_move(
+                            self.gameboard.tile_x,
+                            (self.gameboard.tile_orientation + 1)
+                            % len(self.gameboard.tiles[self.gameboard.cur_tile_type]),
+                        )
                     if event.key == pygame.K_LEFT:
-                        self.gameboard.fn_move(self.gameboard.tile_x-1,self.gameboard.tile_orientation)
+                        self.gameboard.fn_move(
+                            self.gameboard.tile_x - 1, self.gameboard.tile_orientation
+                        )
                     if event.key == pygame.K_RIGHT:
-                        self.gameboard.fn_move(self.gameboard.tile_x+1,self.gameboard.tile_orientation)
+                        self.gameboard.fn_move(
+                            self.gameboard.tile_x + 1, self.gameboard.tile_orientation
+                        )
                     if (event.key == pygame.K_DOWN) or (event.key == pygame.K_SPACE):
-                        self.reward_tots[self.episode]+=self.gameboard.fn_drop()
+                        self.reward_tots[self.episode] += self.gameboard.fn_drop()
