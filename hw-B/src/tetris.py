@@ -13,7 +13,7 @@ PARAM_TASK2b = 6
 
 # Choose to control the game yourself ('human_player=1') to test the setups in the different tasks
 human_player = 0
-human_player = 1
+#human_player = 1
 
 # Choose parameter sets for different tasks
 param_set = PARAM_TASK1a
@@ -169,7 +169,8 @@ else:
     print("Erroneouse param_set. Terminating...")
     raise SystemExit(0)
 
-# The remaining code below is implementation of the game. You don't need to change anything below this line
+# The remaining code below is implementation of the game. You don't need to
+# change anything below this line
 
 if evaluate_agent:
     agent_evaluate = agent

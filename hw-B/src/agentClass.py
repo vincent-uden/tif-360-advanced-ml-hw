@@ -2,7 +2,7 @@ import datetime
 import numpy as np
 import h5py  # type: ignore
 
-from typing import Literal
+from typing import Callable,Literal
 
 from gameboardClass import TGameBoard
 
@@ -19,6 +19,10 @@ class TQAgent:
         self.episode = 0
         self.episode_count = episode_count
 
+        self.episode_reward = 0
+        self.plot_path = f"./cache/plots/{datetime.datetime.now().isoformat()}.csv"
+        self.reward_tots = np.zeros(episode_count)
+
     def fn_init(self, gameboard: TGameBoard):
         self.gameboard = gameboard
 
@@ -26,7 +30,7 @@ class TQAgent:
         self.q_file = h5py.File(f"./cache/q_table/{now.isoformat()}.hdf5", "x")
         self.state_count = np.power(
             2,
-            self.gameboard.N_col * self.gameboard.N_row + self.gameboard.max_tile_count,
+            self.gameboard.N_col * self.gameboard.N_row + len(self.gameboard.tiles)
         )
         self.action_count = self.gameboard.N_col * 4
         # This shouldn't be able to fail since q_file should be unique due to
@@ -35,7 +39,7 @@ class TQAgent:
             "q_table", (self.state_count, self.action_count), dtype=np.dtype(float)
         )
         # Optimistic initialisation
-        self.q_table[:, :] = 100.0
+        self.q_table[:, :] = 0.0
 
         # Rewards???
 
@@ -77,8 +81,8 @@ class TQAgent:
                 self.action_taken = np.random.randint(0, self.action_count)
             else:
                 # Greedy action
-                # TODO: Handle multiple maximal values
-                self.action_taken = np.nanargmax(self.q_table[self.state_id, :])
+                max_val = np.nanmax(self.q_table[self.state_id, :])
+                self.action_taken = np.random.choice(np.nonzero(self.q_table[self.state_id, :] == max_val)[0])
 
             # Actions are stored in a row of the Q-Table as (col, rot) in the
             # following order:
@@ -93,8 +97,9 @@ class TQAgent:
                 self.q_table[self.state_id, self.action_taken] = np.nan
 
     def fn_reinforce(self, old_state_id: int, reward: float):
-        # TODO: Do we need to store self.old_action_taken? Or do have we not
-        # updated the action yet?
+        # The last action performed was moving the block into place before
+        # dropping it. Therefore self.action_taken does what we want and we do
+        # not need an addtional self.old_action_taken
         self.q_table[old_state_id, self.action_taken] += self.alpha * (reward + np.nanmax(self.q_table[self.state_id,:]) - self.q_table[old_state_id, self.action_taken])
 
     def fn_turn(self):
@@ -115,7 +120,7 @@ class TQAgent:
                     ")",
                 )
             if self.episode % 1000 == 0:
-                saveEpisodes = [
+                saveEpisodes = {
                     1000,
                     2000,
                     5000,
@@ -126,9 +131,14 @@ class TQAgent:
                     200000,
                     500000,
                     1000000,
-                ]
+                }
                 if self.episode in saveEpisodes:
-                    pass
+                    # TODO: Decide on what data needs to be saved for plotting
+                    #       and strategy retrieval
+                    with open(self.plot_path, "a") as f:
+                        f.write(f"{self.episode},{self.episode_reward}\n")
+
+                    self.episode_reward = 0
                     # TO BE COMPLETED BY STUDENT
                     # Here you can save the rewards and the Q-table to data
                     # files for plotting of the rewards and the Q-table can be
@@ -141,18 +151,17 @@ class TQAgent:
         else:
             # Select and execute action (move the tile to the desired column and orientation)
             self.fn_select_action()
-            # TO BE COMPLETED BY STUDENT
-            # Here you should write line(s) to copy the old state into the variable 'old_state' which is later passed to fn_reinforce()
+            old_state_id = self.state_id
 
             # Drop the tile on the game board
             reward = self.gameboard.fn_drop()
-            # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to add the current reward to the total reward for the current episode, so you can save it to disk later
+            self.reward_tots[self.episode] += reward
 
             # Read the new state
             self.fn_read_state()
             # Update the Q-table using the old state and the reward (the new state and the taken action should be stored as attributes in self)
-            self.fn_reinforce(old_state, reward)
+            self.fn_reinforce(old_state_id, reward)
 
 
 class TDQNAgent:
