@@ -12,7 +12,7 @@ PARAM_TASK2a = 5
 PARAM_TASK2b = 6
 
 # Choose to control the game yourself ('human_player=1') to test the setups in the different tasks
-human_player = 0
+human_player = 1
 #human_player = 1
 
 # Choose parameter sets for different tasks
