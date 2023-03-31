@@ -176,7 +176,7 @@ class ReplayFrame:
         old_state: np.ndarray,
         action_taken: int,
         reward_obtained: float,
-        next_state: np.ndarray,
+        next_state: np.ndarray | None,
     ):
         self.old_state = old_state
         self.action_taken = action_taken
@@ -209,6 +209,8 @@ class TDQNAgent:
 
         self.replay_buffer: List[ReplayFrame] = [ReplayFrame(0,0,0,0)] * replay_buffer_size
         self.replay_frame = 0
+        self.reward_tots = np.zeros(episode_count)
+        self.buffer_filled = False
 
     def fn_init(self, gameboard):
         self.gameboard = gameboard
@@ -226,8 +228,10 @@ class TDQNAgent:
             optimizer=tf.keras.optimizers.Adam(learning_rate=self.alpha),
             loss=tf.keras.losses.MeanSquaredError()
         )
+        #print("### COMPILED MODEL ###")
+        #print(f"Input shape: {model.input_shape}\tOutput shape: {model.output_shape}")
         self.q_network = model
-        self.target_network = tf.keras.clone_model(self.q_network)
+        self.target_network = tf.keras.models.clone_model(self.q_network)
 
         self.action_count = self.gameboard.N_col * 4
 
@@ -237,9 +241,10 @@ class TDQNAgent:
         # Here you can load the Q-network (to Q-network of self) from the strategy_file
 
     def fn_read_state(self):
-        self.state = np.zeros(self.gameboard.board.size + 4)
-        self.state[0:self.gameboard.board.size] = self.gameboard.board.copy().flatten()
-        self.state[self.gameboard.board.size + self.gameboard.cur_tile_type] = 1
+        self.state = np.zeros((self.gameboard.board.size + 4, 1))
+        self.state[0:self.gameboard.board.size,0] = self.gameboard.board.copy().flatten()
+        self.state[self.gameboard.board.size + self.gameboard.cur_tile_type,0] = 1
+        self.state = self.state.T
 
     def fn_select_action(self):
         is_valid = False
@@ -247,48 +252,46 @@ class TDQNAgent:
         i = 0
         y_hat = self.q_network(self.state)
         reward_order = np.argsort(y_hat)
+        #print(reward_order, reward_order.shape)
+        #print("YHAT", y_hat)
         while not is_valid:
             if r < self.epsilon:
                 # Random action
                 self.action_taken = np.random.randint(0, self.action_count)
             else:
                 # Greedy action
-                assert(i < y_hat.size)
-                self.action_taken = y_hat[reward_order[i]]
+                assert(i < self.action_count)
+                self.action_taken = reward_order[0,i]
                 i += 1
 
             col = self.action_taken // 4
             rot = self.action_taken % 4
 
+            #print("ACTION COL ROT", self.action_taken, col, rot)
             is_valid = self.gameboard.fn_move(col, rot)
 
 
     def fn_reinforce(self, batch_indices: List[int]):
-        batch_x = np.zeros((len(batch_indices), 4))
+        batch_x = np.zeros((len(batch_indices), self.gameboard.board.size + 4))
         batch_y = np.zeros((len(batch_indices), self.action_count))
-        for i, n in enumerate(batch):
-            batch_x[i,:] = self.replay_buffer[n].old_state
-            batch_y[i,:] # This formula is in pdf TODO
-        # TO BE COMPLETED BY STUDENT
-        # This function should be written by you
-        # Instructions:
-        # Update the Q network using a batch of quadruplets (old state, last
-        # action, last reward, new state)
+        for i, n in enumerate(batch_indices):
+            replay_frame = self.replay_buffer[n]
+            q_hat = self.target_network(replay_frame.old_state)
+            batch_x[i,:] = replay_frame.old_state
+            if replay_frame.next_state is None:
+                batch_y[i,:] = self.reward_tots[self.episode]
+            else:
+                batch_y[i,:] = self.reward_tots[self.episode] + np.nanmax(q_hat)
 
-        # Calculate the loss function by first, for each old state, use the
-        # Q-network to calculate the values Q(s_old,a), i.e. the estimate of
-        # the future reward for all actions a
-
-        # Then repeat for the target network to calculate the value \hat
-        # Q(s_new,a) of the new state (use \hat Q=0 if the new state is
-        # terminal)
-
-        # This function should not return a value, the Q table is stored as an
-        # attribute of self
-
-        # Useful variables:
-        # The input argument 'batch' contains a sample of quadruplets used to
-        # update the Q-network
+        self.q_network.fit(
+            x = batch_x,
+            y = batch_y,
+            batch_size=len(batch_indices), # Do we want sub-batches in our selected batches?
+            epochs=1, # Using only one epoch seems wasteful when we've done all the work of selecting a batch
+            validation_split=0.0,
+            validation_data=None,
+            verbose="auto",
+        )
 
     def fn_turn(self):
         if self.gameboard.gameover:
@@ -325,37 +328,48 @@ class TDQNAgent:
                     # TO BE COMPLETED BY STUDENT
                     # Here you can save the rewards and the Q-network to data files
             if self.episode >= self.episode_count:
+                self.q_network.save("./cache/q_table/tdqn")
                 raise SystemExit(0)
             else:
-                if (len(self.exp_buffer) >= self.replay_buffer_size) and (
+                if self.buffer_filled and (
                     (self.episode % self.sync_target_episode_count) == 0
                 ):
-                    pass
-                    # TO BE COMPLETED BY STUDENT
-                    # Here you should write line(s) to copy the current network to the target network
+                    self.target_network = tf.keras.models.clone_model(self.q_network)
                 self.gameboard.fn_restart()
         else:
             # Select and execute action (move the tile to the desired column and orientation)
             self.fn_select_action()
             # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to copy the old state into the variable 'old_state' which is later stored in the ecperience replay buffer
+            old_state = np.copy(self.state)
 
             # Drop the tile on the game board
             reward = self.gameboard.fn_drop()
 
-            # TO BE COMPLETED BY STUDENT
-            # Here you should write line(s) to add the current reward to the total reward for the current episode, so you can save it to disk later
+            self.reward_tots[self.episode] += reward
 
             # Read the new state
             self.fn_read_state()
 
-            # TO BE COMPLETED BY STUDENT
             # Here you should write line(s) to store the state in the experience replay buffer
+            # Should reward be swapped for the summed reward???
+            replay_frame = ReplayFrame(old_state, self.action_taken, reward, np.copy(self.state))
+            self.replay_buffer[self.replay_frame] = replay_frame
+            self.replay_frame += 1
+            if self.replay_frame >= self.replay_buffer_size:
+                self.buffer_filled = True
+            self.replay_frame = self.replay_frame % self.replay_buffer_size
 
-            if len(self.exp_buffer) >= self.replay_buffer_size:
-                # TO BE COMPLETED BY STUDENT
-                # Here you should write line(s) to create a variable 'batch' containing 'self.batch_size' quadruplets
-                self.fn_reinforce(batch)
+            if self.buffer_filled:
+                # Here you should write line(s) to create a variable 'batch'
+                # containing 'self.batch_size' quadruplets
+
+                batch_indices = [-1] * self.batch_size
+                for i in range(self.batch_size):
+                    r = np.random.randint(0, self.batch_size)
+                    batch_indices[i] = r
+
+                self.fn_reinforce(batch_indices)
 
 
 class THumanAgent:

@@ -12,11 +12,11 @@ PARAM_TASK2a = 5
 PARAM_TASK2b = 6
 
 # Choose to control the game yourself ('human_player=1') to test the setups in the different tasks
-human_player = 1
+human_player = 0
 #human_player = 1
 
 # Choose parameter sets for different tasks
-param_set = PARAM_TASK1a
+param_set = PARAM_TASK2a
 # param_set=PARAM_TASK1b
 # param_set=PARAM_TASK1c
 # param_set=PARAM_TASK1d
@@ -121,7 +121,8 @@ elif param_set == PARAM_TASK2a:
 
     alpha = 0.001
     epsilon = 0.001
-    episode_count = 10000
+    episode_count = 6000
+    #episode_count = 10000
 
     epsilon_scale = 5000
     replay_buffer_size = 10000
