@@ -3,6 +3,8 @@ import numpy as np
 import h5py  # type: ignore
 import tensorflow as tf  # type: ignore
 
+from datetime import datetime
+
 from typing import Callable, Literal, List
 
 from gameboardClass import TGameBoard
@@ -211,6 +213,7 @@ class TDQNAgent:
         self.replay_frame = 0
         self.reward_tots = np.zeros(episode_count)
         self.buffer_filled = False
+        self.loss = None
 
     def fn_init(self, gameboard):
         self.gameboard = gameboard
@@ -223,13 +226,10 @@ class TDQNAgent:
         )
         model.add(tf.keras.layers.Dense(64, activation="relu"))
         model.add(tf.keras.layers.Dense(64, activation="relu"))
-        model.add(tf.keras.layers.Dense(16, activation="relu"))
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=self.alpha),
-            loss=tf.keras.losses.MeanSquaredError()
-        )
-        #print("### COMPILED MODEL ###")
-        #print(f"Input shape: {model.input_shape}\tOutput shape: {model.output_shape}")
+        # Figure out a better output activation
+
+        model.add(tf.keras.layers.Dense(16, activation="linear"))
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.alpha)
         self.q_network = model
         self.target_network = tf.keras.models.clone_model(self.q_network)
 
@@ -249,54 +249,69 @@ class TDQNAgent:
     def fn_select_action(self):
         is_valid = False
         r = np.random.random_sample()
-        i = 0
+        i = 1
         y_hat = self.q_network(self.state)
         reward_order = np.argsort(y_hat)
-        #print(reward_order, reward_order.shape)
-        #print("YHAT", y_hat)
+
+        epsilon = np.maximum(self.epsilon, 1.0 - float(self.episode) / self.epsilon_scale)
+        # print(f"{epsilon:.2f} {y_hat} {reward_order}")
         while not is_valid:
-            if r < self.epsilon:
+            if r < epsilon:
                 # Random action
                 self.action_taken = np.random.randint(0, self.action_count)
             else:
                 # Greedy action
-                assert(i < self.action_count)
-                self.action_taken = reward_order[0,i]
+                assert(i <= self.action_count)
+                self.action_taken = reward_order[0,self.action_count-i]
                 i += 1
 
             col = self.action_taken // 4
             rot = self.action_taken % 4
 
-            #print("ACTION COL ROT", self.action_taken, col, rot)
-            is_valid = self.gameboard.fn_move(col, rot)
+            is_valid = self.gameboard.fn_move(col, rot) == 0
+        #print(f"{y_hat} {reward_order} {self.action_taken}")
 
 
     def fn_reinforce(self, batch_indices: List[int]):
         batch_x = np.zeros((len(batch_indices), self.gameboard.board.size + 4))
         batch_y = np.zeros((len(batch_indices), self.action_count))
-        for i, n in enumerate(batch_indices):
-            replay_frame = self.replay_buffer[n]
-            q_hat = self.target_network(replay_frame.old_state)
-            batch_x[i,:] = replay_frame.old_state
-            if replay_frame.next_state is None:
-                batch_y[i,:] = self.reward_tots[self.episode]
-            else:
-                batch_y[i,:] = self.reward_tots[self.episode] + np.nanmax(q_hat)
+        y_mask = np.zeros((len(batch_indices), self.action_count))
 
-        self.q_network.fit(
-            x = batch_x,
-            y = batch_y,
-            batch_size=len(batch_indices), # Do we want sub-batches in our selected batches?
-            epochs=1, # Using only one epoch seems wasteful when we've done all the work of selecting a batch
-            validation_split=0.0,
-            validation_data=None,
-            verbose="auto",
-        )
+        for (i, n) in enumerate(batch_indices):
+            replay_frame = self.replay_buffer[n]
+            batch_x[:,:] = replay_frame.old_state
+            q_hat = self.target_network(replay_frame.old_state)
+            if replay_frame.next_state is None:
+                target = replay_frame.reward_obtained
+            else:
+                target = replay_frame.reward_obtained + np.nanmax(q_hat)
+            batch_y[i,replay_frame.action_taken] = target
+            y_mask[i,replay_frame.action_taken] = 1
+
+        with tf.GradientTape() as tape:
+            y = self.q_network(batch_x)
+            self.loss = tf.math.reduce_mean(((y - batch_y) ** 2) * y_mask, axis=0)
+
+        grad = tape.gradient(self.loss, self.q_network.trainable_variables)
+        self.optimizer.apply_gradients(zip(grad, self.q_network.trainable_variables))
+
+        # print(replay_frame.old_state[0,0:16].reshape(4, 4)[::-1,:])
+        # print(replay_frame.old_state[0,16:])
+
+        # # TODO: Print the field pretter
+        # print(batch_x[0,0:16].reshape(4, 4)[::-1,:])
+        # print(batch_x[0:1,16:])
+        # print(y[0,:])
+        # print(batch_y[0,:])
 
     def fn_turn(self):
         if self.gameboard.gameover:
             self.episode += 1
+            epsilon = np.maximum(self.epsilon, 1.0 - float(self.episode) / self.epsilon_scale)
             if self.episode % 100 == 0:
+                loss = 0
+                if not self.loss is None:
+                    loss = tf.math.reduce_mean(self.loss).numpy()
                 print(
                     "episode "
                     + str(self.episode)
@@ -308,7 +323,11 @@ class TDQNAgent:
                             self.reward_tots[range(self.episode - 100, self.episode)]
                         )
                     ),
-                    ")",
+                    ") epsilon:",
+                    epsilon,
+                    " loss:",
+                    loss,
+                    datetime.now().isoformat(),
                 )
             if self.episode % 1000 == 0:
                 saveEpisodes = [
@@ -329,10 +348,15 @@ class TDQNAgent:
                     # Here you can save the rewards and the Q-network to data files
             if self.episode >= self.episode_count:
                 self.q_network.save("./cache/q_table/tdqn")
+                with open("./cache/plots/tqdn.csv", "w") as f:
+                    text = ""
+                    for x in self.reward_tots:
+                        text += f"{x}\n"
+                    f.write(text)
                 raise SystemExit(0)
             else:
                 if self.buffer_filled and (
-                    (self.episode % self.sync_target_episode_count) == 0
+                    self.episode % self.sync_target_episode_count == 0
                 ):
                     self.target_network = tf.keras.models.clone_model(self.q_network)
                 self.gameboard.fn_restart()
@@ -353,7 +377,8 @@ class TDQNAgent:
 
             # Here you should write line(s) to store the state in the experience replay buffer
             # Should reward be swapped for the summed reward???
-            replay_frame = ReplayFrame(old_state, self.action_taken, reward, np.copy(self.state))
+            replay_frame = ReplayFrame(old_state, self.action_taken, self.reward_tots[self.episode], np.copy(self.state))
+            # replay_frame = ReplayFrame(old_state, self.action_taken, reward, np.copy(self.state))
             self.replay_buffer[self.replay_frame] = replay_frame
             self.replay_frame += 1
             if self.replay_frame >= self.replay_buffer_size:
