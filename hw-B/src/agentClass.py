@@ -337,8 +337,8 @@ class TDQNAgent:
 
             self.fn_read_state()
 
-            replay_frame = ReplayFrame(old_state, self.action_taken, self.reward_tots[self.episode], np.copy(self.state))
-            # replay_frame = ReplayFrame(old_state, self.action_taken, reward, np.copy(self.state))
+            # replay_frame = ReplayFrame(old_state, self.action_taken, self.reward_tots[self.episode], np.copy(self.state))
+            replay_frame = ReplayFrame(old_state, self.action_taken, reward, np.copy(self.state))
             self.replay_buffer[self.replay_frame] = replay_frame
             self.replay_frame += 1
             if self.replay_frame >= self.replay_buffer_size:
