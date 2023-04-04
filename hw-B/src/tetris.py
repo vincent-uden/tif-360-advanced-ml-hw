@@ -121,10 +121,10 @@ elif param_set == PARAM_TASK2a:
 
     alpha = 0.001
     epsilon = 0.001
-    episode_count = 5000
+    episode_count = 10000
 
-    epsilon_scale = 2500
-    replay_buffer_size = 1000
+    epsilon_scale = 5000
+    replay_buffer_size = 10000
     batch_size = 32
     sync_target_episode_count = 100
 

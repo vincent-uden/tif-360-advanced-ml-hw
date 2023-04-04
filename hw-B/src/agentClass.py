@@ -94,8 +94,7 @@ class TQAgent:
             col = self.action_taken // 4
             rot = self.action_taken % 4
 
-            # What do we do if it is invalid? Set to NaN?
-            is_valid = self.gameboard.fn_move(col, rot)
+            is_valid = self.gameboard.fn_move(col, rot) == 0
 
             if not is_valid:
                 self.q_table[self.state_id, self.action_taken] = np.nan
@@ -141,16 +140,8 @@ class TQAgent:
                     1000000,
                 }
                 if self.episode in saveEpisodes:
-                    # TODO: Decide on what data needs to be saved for plotting
-                    #       and strategy retrieval
                     with open(self.plot_path, "a") as f:
-                        f.write(f"{self.episode},{self.episode_reward}\n")
-
-                    self.episode_reward = 0
-                    # TO BE COMPLETED BY STUDENT
-                    # Here you can save the rewards and the Q-table to data
-                    # files for plotting of the rewards and the Q-table can be
-                    # used to test how the agent plays
+                        f.write(f"{self.episode},{self.reward_tots[self.episode]}\n")
 
             if self.episode >= self.episode_count:
                 raise SystemExit(0)
@@ -226,8 +217,6 @@ class TDQNAgent:
         )
         model.add(tf.keras.layers.Dense(64, activation="relu"))
         model.add(tf.keras.layers.Dense(64, activation="relu"))
-        # Figure out a better output activation
-
         model.add(tf.keras.layers.Dense(16, activation="linear"))
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.alpha)
         self.q_network = model
@@ -254,7 +243,6 @@ class TDQNAgent:
         reward_order = np.argsort(y_hat)
 
         epsilon = np.maximum(self.epsilon, 1.0 - float(self.episode) / self.epsilon_scale)
-        # print(f"{epsilon:.2f} {y_hat} {reward_order}")
         while not is_valid:
             if r < epsilon:
                 # Random action
@@ -269,7 +257,6 @@ class TDQNAgent:
             rot = self.action_taken % 4
 
             is_valid = self.gameboard.fn_move(col, rot) == 0
-        #print(f"{y_hat} {reward_order} {self.action_taken}")
 
 
     def fn_reinforce(self, batch_indices: List[int]):
@@ -279,7 +266,7 @@ class TDQNAgent:
 
         for (i, n) in enumerate(batch_indices):
             replay_frame = self.replay_buffer[n]
-            batch_x[:,:] = replay_frame.old_state
+            batch_x[i,:] = replay_frame.old_state
             q_hat = self.target_network(replay_frame.old_state)
             if replay_frame.next_state is None:
                 target = replay_frame.reward_obtained
@@ -295,15 +282,6 @@ class TDQNAgent:
         grad = tape.gradient(self.loss, self.q_network.trainable_variables)
         self.optimizer.apply_gradients(zip(grad, self.q_network.trainable_variables))
 
-        # print(replay_frame.old_state[0,0:16].reshape(4, 4)[::-1,:])
-        # print(replay_frame.old_state[0,16:])
-
-        # # TODO: Print the field pretter
-        # print(batch_x[0,0:16].reshape(4, 4)[::-1,:])
-        # print(batch_x[0:1,16:])
-        # print(y[0,:])
-        # print(batch_y[0,:])
-
     def fn_turn(self):
         if self.gameboard.gameover:
             self.episode += 1
@@ -312,23 +290,12 @@ class TDQNAgent:
                 loss = 0
                 if not self.loss is None:
                     loss = tf.math.reduce_mean(self.loss).numpy()
-                print(
-                    "episode "
-                    + str(self.episode)
-                    + "/"
-                    + str(self.episode_count)
-                    + " (reward: ",
-                    str(
-                        np.sum(
-                            self.reward_tots[range(self.episode - 100, self.episode)]
-                        )
-                    ),
-                    ") epsilon:",
-                    epsilon,
-                    " loss:",
-                    loss,
-                    datetime.now().isoformat(),
+                outlog = (
+                    f"""episode {self.episode}/{self.episode_count} """
+                    f"""(reward: {np.sum(self.reward_tots[range(self.episode - 100, self.episode)])}) """
+                    f"""epsilon: {epsilon:.2f} loss: {loss:.5f} {datetime.now().isoformat()}"""
                 )
+                print(outlog)
             if self.episode % 1000 == 0:
                 saveEpisodes = [
                     1000,
@@ -361,22 +328,15 @@ class TDQNAgent:
                     self.target_network = tf.keras.models.clone_model(self.q_network)
                 self.gameboard.fn_restart()
         else:
-            # Select and execute action (move the tile to the desired column and orientation)
             self.fn_select_action()
-            # TO BE COMPLETED BY STUDENT
-            # Here you should write line(s) to copy the old state into the variable 'old_state' which is later stored in the ecperience replay buffer
             old_state = np.copy(self.state)
 
-            # Drop the tile on the game board
             reward = self.gameboard.fn_drop()
 
             self.reward_tots[self.episode] += reward
 
-            # Read the new state
             self.fn_read_state()
 
-            # Here you should write line(s) to store the state in the experience replay buffer
-            # Should reward be swapped for the summed reward???
             replay_frame = ReplayFrame(old_state, self.action_taken, self.reward_tots[self.episode], np.copy(self.state))
             # replay_frame = ReplayFrame(old_state, self.action_taken, reward, np.copy(self.state))
             self.replay_buffer[self.replay_frame] = replay_frame
@@ -386,9 +346,6 @@ class TDQNAgent:
             self.replay_frame = self.replay_frame % self.replay_buffer_size
 
             if self.buffer_filled:
-                # Here you should write line(s) to create a variable 'batch'
-                # containing 'self.batch_size' quadruplets
-
                 batch_indices = [-1] * self.batch_size
                 for i in range(self.batch_size):
                     r = np.random.randint(0, self.batch_size)
