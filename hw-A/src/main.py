@@ -119,30 +119,30 @@ if __name__ == "__main__":
     test_acc = model.test(data)
     print(f"Test accuracy: {test_acc}")
 
-    model = GCN(16, dataset)
+    gcn_model = GCN(16, dataset)
     criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
+    optimizer = torch.optim.Adam(gcn_model.parameters(), lr=0.01, weight_decay=5e-4)
 
     print()
-    print(model)
+    print(gcn_model)
     print()
 
-    model.eval()
-    out = model(data.x, data.edge_index)
+    gcn_model.eval()
+    out = gcn_model(data.x, data.edge_index)
     plt.subplot(1, 2, 1)
     visualize(out, color=data.y)
     plt.title("Before Training")
 
     pbar = trange(1, 101)
     for epoch in pbar:
-        loss = model.train_epoch(optimizer, criterion, data)
+        loss = gcn_model.train_epoch(optimizer, criterion, data)
         pbar.set_description(f"Epoch: {epoch:03d} Loss: {loss:.4f}")
 
-    test_acc = model.test(data)
+    test_acc = gcn_model.test(data)
     print(f"Test accuracy: {test_acc}")
 
-    model.eval()
-    out = model(data.x, data.edge_index)
+    gcn_model.eval()
+    out = gcn_model(data.x, data.edge_index)
     plt.subplot(1, 2, 2)
     visualize(out, color=data.y)
     plt.title(f"After Training (acc={test_acc})")
