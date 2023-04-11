@@ -7,7 +7,6 @@ from sklearn.manifold import TSNE
 from torch_geometric.datasets import Planetoid
 from torch_geometric.transforms import NormalizeFeatures
 from torch_geometric.nn import GCNConv
-from torch.nn import Linear
 from torch.nn import functional as F
 from tqdm import trange
 
@@ -19,24 +18,24 @@ def visualize(h, color):
 
     plt.scatter(z[:,0], z[:,1], s=70, c=color, cmap="Set2")
 
-class MultiLayerPerceptron(torch.nn.Module):
+class GCN(torch.nn.Module):
     def __init__(self, hidden_channels: int, dataset: Planetoid):
         super().__init__()
-        torch.manual_seed(12345)
-        self.lin1 = Linear(dataset.num_features, hidden_channels)
-        self.lin2 = Linear(hidden_channels, dataset.num_classes)
+        torch.manual_seed(1234567)
+        self.conv1 = GCNConv(dataset.num_features, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, dataset.num_classes)
 
-    def forward(self, x):
-        x = self.lin1(x)
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
         x = x.relu()
         x = F.dropout(x, p=0.5, training=self.training)
-        x = self.lin2(x)
+        x = self.conv2(x, edge_index)
         return x
 
     def train_epoch(self, optimizer, criterion, data):
         self.train()
         optimizer.zero_grad()
-        out = self(data.x)
+        out = self(data.x, data.edge_index)
         loss = criterion(out[data.train_mask], data.y[data.train_mask])
         loss.backward() # Compute gradients
         optimizer.step()
@@ -44,7 +43,7 @@ class MultiLayerPerceptron(torch.nn.Module):
 
     def test(self, data):
         self.eval()
-        out = self(data.x)
+        out = self(data.x, data.edge_index)
         pred = out.argmax(dim=1)
         test_correct = pred[data.test_mask] == data.y[data.test_mask]
         test_acc = int(test_correct.sum()) / int(data.test_mask.sum())
@@ -72,7 +71,7 @@ if __name__ == "__main__":
     print(f'Has self-loops: {data.has_self_loops()}')
     print(f'Is undirected: {data.is_undirected()}')
 
-    model = MultiLayerPerceptron(4, dataset)
+    model = GCN(16, dataset)
     criterion = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
 
@@ -80,11 +79,25 @@ if __name__ == "__main__":
     print(model)
     print()
 
-    pbar = trange(1, 201)
+    model.eval()
+    out = model(data.x, data.edge_index)
+    plt.subplot(1, 2, 1)
+    visualize(out, color=data.y)
+    plt.title("Before Training")
+
+    pbar = trange(1, 101)
     for epoch in pbar:
         loss = model.train_epoch(optimizer, criterion, data)
         pbar.set_description(f"Epoch: {epoch:03d} Loss: {loss:.4f}")
 
     test_acc = model.test(data)
     print(f"Test accuracy: {test_acc}")
+
+    model.eval()
+    out = model(data.x, data.edge_index)
+    plt.subplot(1, 2, 2)
+    visualize(out, color=data.y)
+    plt.title(f"After Training (acc={test_acc})")
+
+    plt.show()
 
