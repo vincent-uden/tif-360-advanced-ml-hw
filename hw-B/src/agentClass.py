@@ -1,7 +1,9 @@
+import copy
 import datetime
 import numpy as np
 import h5py  # type: ignore
-import tensorflow as tf  # type: ignore
+import torch # type: ignore
+import torch.nn.functional as F
 
 from datetime import datetime
 
@@ -177,6 +179,21 @@ class ReplayFrame:
         self.next_state = next_state
 
 
+class QNet(torch.nn.Module):
+    def __init__(self, gameboard: TGameBoard):
+        super(QNet, self).__init__()
+
+        self.linear1 = torch.nn.Linear(gameboard.N_col * gameboard.N_row + len(gameboard.tiles), 64)
+        self.linear2 = torch.nn.Linear(64, 64)
+        self.linear3 = torch.nn.Linear(64, 16)
+
+    def forward(self, x):
+        x = F.relu(self.linear1(x))
+        x = F.relu(self.linear2(x))
+        x = self.linear3(x)
+
+        return x
+
 class TDQNAgent:
     state: np.ndarray
     # Agent for learning to play tetris using Q-learning
@@ -209,18 +226,11 @@ class TDQNAgent:
     def fn_init(self, gameboard):
         self.gameboard = gameboard
 
-        model = tf.keras.models.Sequential()
-        model.add(
-            tf.keras.Input(
-                shape=(gameboard.N_col * gameboard.N_col + len(gameboard.tiles)),
-            )
-        )
-        model.add(tf.keras.layers.Dense(64, activation="relu"))
-        model.add(tf.keras.layers.Dense(64, activation="relu"))
-        model.add(tf.keras.layers.Dense(16, activation="linear"))
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.alpha)
-        self.q_network = model
-        self.target_network = tf.keras.models.clone_model(self.q_network)
+        self.q_network = QNet(gameboard)
+        self.target_network = copy.deepcopy(self.q_network)
+
+        self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.alpha)
+        self.loss_fn = torch.nn.MSELoss()
 
         self.action_count = self.gameboard.N_col * 4
 
@@ -229,58 +239,57 @@ class TDQNAgent:
         # TO BE COMPLETED BY STUDENT
         # Here you can load the Q-network (to Q-network of self) from the strategy_file
 
+    # Looks correct
     def fn_read_state(self):
         self.state = np.zeros((self.gameboard.board.size + 4, 1))
         self.state[0:self.gameboard.board.size,0] = self.gameboard.board.copy().flatten()
         self.state[self.gameboard.board.size + self.gameboard.cur_tile_type,0] = 1
         self.state = self.state.T
 
+    # Looks correct
     def fn_select_action(self):
-        is_valid = False
-        r = np.random.random_sample()
-        i = 1
-        y_hat = self.q_network(self.state)
-        reward_order = np.argsort(y_hat)
+        self.q_network.eval()
+
+        y_hat = self.q_network(torch.from_numpy(self.state).float())
+        reward_order = np.argsort(y_hat.detach().numpy())
 
         epsilon = np.maximum(self.epsilon, 1.0 - float(self.episode) / self.epsilon_scale)
-        while not is_valid:
-            if r < epsilon:
-                # Random action
-                self.action_taken = np.random.randint(0, self.action_count)
-            else:
-                # Greedy action
-                assert(i <= self.action_count)
-                self.action_taken = reward_order[0,self.action_count-i]
-                i += 1
+        r = np.random.random_sample()
 
-            col = self.action_taken // 4
-            rot = self.action_taken % 4
+        #while not is_valid:
+        if r < epsilon:
+            self.action_taken = np.random.randint(0, self.action_count)
+        else:
+            # Greedy action
+            self.action_taken = reward_order[0,self.action_count-1]
 
-            is_valid = self.gameboard.fn_move(col, rot) == 0
+        col = self.action_taken // 4
+        rot = self.action_taken % 4
+
+        is_valid = self.gameboard.fn_move(col, rot) == 0
 
 
     def fn_reinforce(self, batch_indices: List[int]):
-        batch_x = np.zeros((len(batch_indices), self.gameboard.board.size + 4))
-        batch_y = np.zeros((len(batch_indices), self.action_count))
-        y_mask = np.zeros((len(batch_indices), self.action_count))
+        self.q_network.train()
+        self.target_network.eval()
 
         for (i, n) in enumerate(batch_indices):
             replay_frame = self.replay_buffer[n]
-            batch_x[i,:] = replay_frame.old_state
-            q_hat = self.target_network(replay_frame.old_state)
-            if replay_frame.next_state is None:
-                target = replay_frame.reward_obtained
+
+            q_hat = self.target_network(torch.from_numpy(replay_frame.next_state).float())
+
+            if (replay_frame.next_state == replay_frame.old_state).all():
+                y = replay_frame.reward_obtained
             else:
-                target = replay_frame.reward_obtained + np.nanmax(q_hat)
-            batch_y[i,replay_frame.action_taken] = target
-            y_mask[i,replay_frame.action_taken] = 1
+                y = replay_frame.reward_obtained + torch.max(q_hat)
 
-        with tf.GradientTape() as tape:
-            y = self.q_network(batch_x)
-            self.loss = tf.math.reduce_mean(((y - batch_y) ** 2) * y_mask, axis=0)
+            Q = self.q_network(torch.from_numpy(replay_frame.old_state).float())[0,replay_frame.action_taken]
 
-        grad = tape.gradient(self.loss, self.q_network.trainable_variables)
-        self.optimizer.apply_gradients(zip(grad, self.q_network.trainable_variables))
+            self.loss = torch.square(Q - y)
+            self.loss.backward()
+
+        self.optimizer.step()
+        self.optimizer.zero_grad()
 
     def fn_turn(self):
         if self.gameboard.gameover:
@@ -289,7 +298,7 @@ class TDQNAgent:
             if self.episode % 100 == 0:
                 loss = 0
                 if not self.loss is None:
-                    loss = tf.math.reduce_mean(self.loss).numpy()
+                    loss = self.loss.item()
                 outlog = (
                     f"""episode {self.episode}/{self.episode_count} """
                     f"""(reward: {np.sum(self.reward_tots[range(self.episode - 100, self.episode)])}) """
@@ -314,7 +323,8 @@ class TDQNAgent:
                     # TO BE COMPLETED BY STUDENT
                     # Here you can save the rewards and the Q-network to data files
             if self.episode >= self.episode_count:
-                self.q_network.save("./cache/q_table/tdqn")
+                # TODO: Figure out how to save pytorch network
+                # self.q_network.save("./cache/q_table/tdqn")
                 with open("./cache/plots/tqdn.csv", "w") as f:
                     text = ""
                     for x in self.reward_tots:
@@ -325,7 +335,8 @@ class TDQNAgent:
                 if self.buffer_filled and (
                     self.episode % self.sync_target_episode_count == 0
                 ):
-                    self.target_network = tf.keras.models.clone_model(self.q_network)
+                    print("Syncing networks!!")
+                    self.target_network = copy.deepcopy(self.q_network)
                 self.gameboard.fn_restart()
         else:
             self.fn_select_action()
@@ -339,8 +350,10 @@ class TDQNAgent:
 
             # replay_frame = ReplayFrame(old_state, self.action_taken, self.reward_tots[self.episode], np.copy(self.state))
             replay_frame = ReplayFrame(old_state, self.action_taken, reward, np.copy(self.state))
+
             self.replay_buffer[self.replay_frame] = replay_frame
             self.replay_frame += 1
+
             if self.replay_frame >= self.replay_buffer_size:
                 self.buffer_filled = True
             self.replay_frame = self.replay_frame % self.replay_buffer_size
@@ -348,7 +361,7 @@ class TDQNAgent:
             if self.buffer_filled:
                 batch_indices = [-1] * self.batch_size
                 for i in range(self.batch_size):
-                    r = np.random.randint(0, self.batch_size)
+                    r = np.random.randint(0, self.replay_buffer_size)
                     batch_indices[i] = r
 
                 self.fn_reinforce(batch_indices)
